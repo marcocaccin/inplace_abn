@@ -1,9 +1,11 @@
 import argparse
+import tempfile
 from functools import partial
 from os import path
 
 import numpy as np
 import torch
+import s3fs
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as functional
@@ -18,7 +20,7 @@ from modules.bn import InPlaceABN
 from modules.deeplab import DeeplabV3
 
 parser = argparse.ArgumentParser(description="Testing script for the Vistas segmentation model")
-parser.add_argument("--scales", metavar="LIST", type=str, default="[0.7, 1, 1.2]", help="List of scales")
+parser.add_argument("--scales", metavar="LIST", type=str, default="[1,]", help="List of scales")
 parser.add_argument("--flip", action="store_true", help="Use horizontal flipping")
 parser.add_argument("--fusion-mode", metavar="NAME", type=str, choices=["mean", "voting", "max"], default="mean",
                     help="How to fuse the outputs. Options: 'mean', 'voting', 'max'")
@@ -40,6 +42,13 @@ def flip(x, dim):
     indices[dim] = torch.arange(x.size(dim) - 1, -1, -1,
                                 dtype=torch.long, device=x.device)
     return x[tuple(indices)]
+
+
+def save_img_to_s3(img, remote_path, s3):
+    with tempfile.NamedTemporaryFile(suffix='.png') as tmp:
+        name = tmp.name
+        img.save(name)
+        s3.put(name, remote_path)
 
 
 class SegmentationModule(nn.Module):
@@ -154,7 +163,6 @@ def main():
     model = SegmentationModule(body, head, 256, 65, args.fusion_mode)
     model.cls.load_state_dict(cls_state)
     model = model.cuda().eval()
-    print(model)
 
     # Create data loader
     transformation = SegmentationTransform(
@@ -173,6 +181,8 @@ def main():
         shuffle=False
     )
 
+    s3 = s3fs.S3FileSystem(s3_additional_kwargs={'ServerSideEncryption': 'AES256'})
+
     # Run testing
     scales = eval(args.scales)
     with torch.no_grad():
@@ -190,12 +200,20 @@ def main():
                 prob = prob.cpu()
                 pred = pred.cpu()
                 pred_img = get_pred_image(pred, out_size, args.output_mode == "palette")
-                pred_img.save(path.join(args.output, img_name + ".png"))
+                save_img_to_s3(
+                    pred_img,
+                    path.join(args.output, img_name + ".png"),
+                    s3
+                )
 
                 # Optionally save probabilities
                 if args.output_mode == "prob":
                     prob_img = get_prob_image(prob, out_size)
-                    prob_img.save(path.join(args.output, img_name + "_prob.png"))
+                    save_img_to_s3(
+                        prob_img,
+                        path.join(args.output, img_name + "_prob.png"),
+                        s3
+                    )
 
 
 def load_snapshot(snapshot_file):

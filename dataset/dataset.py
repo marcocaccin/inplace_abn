@@ -1,3 +1,4 @@
+import tempfile
 from itertools import chain
 
 import glob
@@ -40,10 +41,10 @@ class SegmentationDataset(Dataset):
 
 
 class S3Dataset(Dataset):
-    def __init__(self, bucket_path, transform):
+    def __init__(self, bucket, transform):
         super(S3Dataset, self).__init__()
 
-        self.path = bucket_path
+        self.bucket = bucket
         self.transform = transform
         self.s3 = s3fs.S3FileSystem(
             s3_additional_kwargs={'ServerSideEncryption': 'AES256'}
@@ -51,7 +52,7 @@ class S3Dataset(Dataset):
 
         # Find all images
         self.images = []
-        for img_path in self.s3.ls(path):
+        for img_path in self.s3.ls(self.bucket):
             _, name_with_ext = path.split(img_path)
             idx, _ = path.splitext(name_with_ext)
             self.images.append({
@@ -64,11 +65,19 @@ class S3Dataset(Dataset):
 
     def __getitem__(self, item):
         # Load image
-        with Image.open(self.images[item]["path"]) as img_raw:
+        with self._load_img(self.images[item]["path"]) as img_raw:
             size = img_raw.size
             img = self.transform(img_raw.convert(mode="RGB"))
 
         return {"img": img, "meta": {"idx": self.images[item]["idx"], "size": size}}
+
+    def _load_img(self, remote_path):
+        with tempfile.NamedTemporaryFile() as tmp:
+            name = tmp.name
+            self.s3.get(remote_path, name)
+            img = Image.open(name)
+
+        return img
 
 
 def segmentation_collate(items):
