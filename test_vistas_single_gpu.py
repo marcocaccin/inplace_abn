@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 import models
-from dataset.dataset import SegmentationDataset, segmentation_collate
+from dataset.dataset import SegmentationDataset, S3Dataset, segmentation_collate
 from dataset.transform import SegmentationTransform
 from modules.bn import InPlaceABN
 from modules.deeplab import DeeplabV3
@@ -109,7 +109,7 @@ class SegmentationModule(nn.Module):
 
     def _network(self, x, scale):
         if scale != 1:
-            scaled_size = [s * scale for s in x.shape[-2:]]
+            scaled_size = [round(s * scale) for s in x.shape[-2:]]
             x_up = functional.upsample(x, size=scaled_size, mode="bilinear")
         else:
             x_up = x
@@ -162,7 +162,7 @@ def main():
         (0.41738699, 0.45732192, 0.46886091),
         (0.25685097, 0.26509955, 0.29067996),
     )
-    dataset = SegmentationDataset(args.data, transformation)
+    dataset = S3Dataset(args.data, transformation)
     data_loader = DataLoader(
         dataset,
         batch_size=1,
